@@ -13,9 +13,7 @@
  * @file    SFMExample_SmartFactor.cpp
  * @brief   A structure-from-motion problem on a simulated dataset, using smart
  * projection factor
- * @author  Duy-Nguyen Ta
- * @author  Jing Dong
- * @author  Frank Dellaert
+ * @author  ghaggin
  */
 
 // In GTSAM, measurement functions are represented as 'factors'.
@@ -25,64 +23,59 @@
 // not the calibration, which is assumed known.
 #include <gtsam/slam/SmartProjectionPoseFactor.h>
 
-#include <gtsam/geometry/Cal3DS2.h>
+// Camera calibration
 #include <gtsam/geometry/Cal3Fisheye.h>
 
 // For an explanation of these headers, see SFMExample.cpp
 #include <gtsam/nonlinear/LevenbergMarquardtOptimizer.h>
 #include "SFMdata.h"
 
+// For disturbing the intial estimates and measurements
 #include <random>
 
 using namespace std;
 using namespace gtsam;
 
 // Make the typename short so it looks much cleaner
-typedef SmartProjectionPoseFactor<Cal3DS2> SmartFactor;
-
-// create a typedef to the camera type
-typedef PinholePose<Cal3DS2> Camera;
+typedef SmartProjectionPoseFactor<Cal3Fisheye> SmartFactor;
+typedef PinholePose<Cal3Fisheye> Camera;
 
 /* ************************************************************************* */
 int main(int argc, char* argv[]) {
   // Define the camera calibration parameters
-  boost::shared_ptr<Cal3DS2> K(new Cal3DS2(500, 100, 0.1, 320, 240, 1e-2,
-                                           2.0 * 1e-2, 3.0 * 1e-2, 4.0 * 1e-2));
+  boost::shared_ptr<Cal3Fisheye> calibration(new Cal3Fisheye(
+      500, 100, 0.1, 320, 240, 1e-2, 2.0 * 1e-2, 3.0 * 1e-2, 4.0 * 1e-2));
 
   // Define the camera observation noise model
-  noiseModel::Isotropic::shared_ptr measurementNoise =
+  noiseModel::Isotropic::shared_ptr meas_noise =
       noiseModel::Isotropic::Sigma(2, 1.0);  // one pixel in u and v
 
   // Create the set of ground-truth landmarks and poses
+  // from SFMdata
   vector<Point3> points = createPoints();
   vector<Pose3> poses = createPoses();
 
   // Create a factor graph
   NonlinearFactorGraph graph;
 
-  // Simulated measurements from each camera pose, adding them to the factor
-  // graph
+  // For each landmark, simulate measurement from each camera pose
+  // adding it to the smart factor, then add the smart factor to the graph
   for (size_t j = 0; j < points.size(); ++j) {
-    // every landmark represent a single landmark, we use shared pointer to init
-    // the factor, and then insert measurements.
-    SmartFactor::shared_ptr smartfactor(new SmartFactor(measurementNoise, K));
+    // Create smart factor for this landmark
+    auto smartfactor = boost::make_shared<SmartFactor>(meas_noise, calibration);
 
     for (size_t i = 0; i < poses.size(); ++i) {
-      // generate the 2D measurement
-      Camera camera(poses[i], K);
+      // generate measurement in image plane
+      Camera camera(poses[i], calibration);
       Point2 measurement = camera.project(points[j]);
 
-      // call add() function to add measurement into a single factor, here we
-      // need to add:
-      //    1. the 2D measurement
-      //    2. the corresponding camera's key
-      //    3. camera noise model
-      //    4. camera calibration
+      // add measurement to the smart factor for camera
+      // frame i
       smartfactor->add(measurement, i);
     }
 
     // insert the smart factor in the graph
-    graph.push_back(smartfactor);
+    graph.add(smartfactor);
   }
 
   // Add a prior on pose x0. This indirectly specifies where the origin is.
@@ -105,7 +98,7 @@ int main(int argc, char* argv[]) {
   // Intentionally initialize the variables off from the ground truth
   std::random_device rd{};
   std::mt19937 gen{rd()};
-  std::normal_distribution<> rnd_angle(0, 0.1);
+  std::normal_distribution<> rnd_angle(0, 0.01);
   std::normal_distribution<> rnd_pos(0, 0.5);
 
   Values initialEstimate;
