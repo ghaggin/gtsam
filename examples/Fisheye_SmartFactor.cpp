@@ -31,20 +31,22 @@
 #include "SFMdata.h"
 
 // For disturbing the intial estimates and measurements
+#include <iostream>
 #include <random>
 
 using namespace std;
 using namespace gtsam;
 
 // Make the typename short so it looks much cleaner
-typedef SmartProjectionPoseFactor<Cal3Fisheye> SmartFactor;
 typedef PinholePose<Cal3Fisheye> Camera;
+typedef SmartProjectionFactor<Camera> SmartFactor;
 
 /* ************************************************************************* */
 int main(int argc, char* argv[]) {
   // Define the camera calibration parameters
   boost::shared_ptr<Cal3Fisheye> calibration(new Cal3Fisheye(
-      500, 100, 0.1, 320, 240, 1e-2, 2.0 * 1e-2, 3.0 * 1e-2, 4.0 * 1e-2));
+      278.66, 278.48, 0.0, 319.75, 241.96, -0.013721808247486035,
+      0.020727425669427896, -0.012786476702685545, 0.0025242267320687625));
 
   // Define the camera observation noise model
   noiseModel::Isotropic::shared_ptr meas_noise =
@@ -58,11 +60,15 @@ int main(int argc, char* argv[]) {
   // Create a factor graph
   NonlinearFactorGraph graph;
 
+  // Set the smart projection factor params
+  SmartProjectionParams sf_params;
+  sf_params.setRetriangulationThreshold(1e-7);
+
   // For each landmark, simulate measurement from each camera pose
   // adding it to the smart factor, then add the smart factor to the graph
   for (size_t j = 0; j < points.size(); ++j) {
     // Create smart factor for this landmark
-    auto smartfactor = boost::make_shared<SmartFactor>(meas_noise, calibration);
+    auto smartfactor = boost::make_shared<SmartFactor>(meas_noise);
 
     for (size_t i = 0; i < poses.size(); ++i) {
       // generate measurement in image plane
@@ -82,15 +88,16 @@ int main(int argc, char* argv[]) {
   // 30cm std on x,y,z 0.1 rad on roll,pitch,yaw
   noiseModel::Diagonal::shared_ptr noise = noiseModel::Diagonal::Sigmas(
       (Vector(6) << Vector3::Constant(0.1), Vector3::Constant(0.3)).finished());
-  graph.emplace_shared<PriorFactor<Pose3> >(0, poses[0], noise);
+  graph.emplace_shared<PriorFactor<Camera> >(0, Camera(poses[0], calibration),
+                                             noise);
 
   // Because the structure-from-motion problem has a scale ambiguity, the
   // problem is still under-constrained. Here we add a prior on the second pose
   // x1, so this will fix the scale by indicating the distance between x0 and
   // x1. Because these two are fixed, the rest of the poses will be also be
   // fixed.
-  graph.emplace_shared<PriorFactor<Pose3> >(1, poses[1],
-                                            noise);  // add directly to graph
+  graph.emplace_shared<PriorFactor<Camera> >(1, Camera(poses[1], calibration),
+                                             noise);  // add directly to graph
 
   graph.print("Factor Graph:\n");
 
@@ -99,13 +106,13 @@ int main(int argc, char* argv[]) {
   std::random_device rd{};
   std::mt19937 gen{rd()};
   std::normal_distribution<> rnd_angle(0, 0.01);
-  std::normal_distribution<> rnd_pos(0, 0.5);
+  std::normal_distribution<> rnd_pos(0, 2);
 
   Values initialEstimate;
   for (size_t i = 0; i < poses.size(); ++i) {
     Pose3 delta(Rot3::Rodrigues(rnd_angle(gen), rnd_angle(gen), rnd_angle(gen)),
                 Point3(rnd_pos(gen), rnd_pos(gen), rnd_pos(gen)));
-    initialEstimate.insert(i, poses[i].compose(delta));
+    initialEstimate.insert(i, Camera(poses[i].compose(delta), calibration));
   }
   initialEstimate.print("Initial Estimates:\n");
 
@@ -137,6 +144,23 @@ int main(int argc, char* argv[]) {
   landmark_result.print("Landmark results:\n");
   cout << "final error: " << graph.error(result) << endl;
   cout << "number of iterations: " << optimizer.iterations() << endl;
+
+  // double error = 0;
+  // for (int i = 0; i < 8; ++i) {
+  //   auto pose = result.at(i).cast<Pose3>();
+
+  //   error += Pose3::Logmap(pose.inverse() * poses[i]).norm();
+  // }
+
+  // std::cout << "Pose error = " << error << std::endl;
+
+  // error = 0;  // reset error
+  // for (int i = 0; i < 6; ++i) {
+  //   auto p = landmark_result.at(i).cast<Point3>();
+  //   error += (p - points[i]).norm();
+  // }
+
+  // std::cout << "Landmark error = " << error << std::endl;
 
   return 0;
 }
